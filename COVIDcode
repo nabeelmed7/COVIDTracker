@@ -1,0 +1,168 @@
+#### Import libraries
+from dash import html, dash, dcc
+import dash_bootstrap_components as dbc
+from dash.dependencies import Input,Output
+
+import requests
+import pandas as pd
+import plotly.express as px
+# Proccess Data
+
+#### Different Database
+url = "https://api.covid19api.com/summary"
+url_2 = "https://covid.ourworldindata.org/data/owid-covid-data.csv"
+backgroup_image = 'url(https://www.fda.gov/files/covid19-feature-1600x900.jpg)'
+#### Get information from Database 
+
+response = requests.request("GET", url)
+countries=pd.DataFrame(response.json()['Countries'])
+df_global=pd.DataFrame(response.json()['Global'], index=[0])
+last_updated=response.json()['Date']
+
+confirmed = df_global['TotalConfirmed'][0]
+newconfirmed = df_global['NewConfirmed'][0]
+
+deaths = df_global['TotalDeaths'][0]
+newdeaths = df_global['NewDeaths'][0]
+
+
+df_world_d = pd.read_csv(url_2)
+#### Modified DataFrame
+
+
+df_world_d = df_world_d[df_world_d['continent'].notna()]
+df_world_d = df_world_d[['iso_code','location','date','total_vaccinations','total_cases','total_deaths']]
+df_world_d.rename(columns={"location": "Country", "total_vaccinations": "Total Vaccinations", 
+                           "total_cases": "Total Cases", "total_deaths": "Total Deaths"}, inplace=True)
+
+df_world_d['date']= pd.to_datetime(df_world_d['date'], format='%Y-%m-%d')
+
+df_world_clean = df_world_d[df_world_d['Country'] == 'error']
+
+for pais in df_world_d['Country'].unique():
+    df_world_clean = pd.concat([df_world_clean, df_world_d[df_world_d['Country'] == pais].fillna(method='pad')])
+
+df_world_last = df_world_clean.sort_values(by='date',ascending=False).drop_duplicates(subset=['Country'])
+acc_data = df_world_last[['Total Vaccinations', 'Total Cases', 'Total Deaths']].sum()
+
+
+# Create functions:
+def graph_map(df, row_name = 'Total Cases'):
+    fig = px.choropleth(df, locations = "iso_code", color = row_name, 
+                        hover_name = "Country",
+                        hover_data = ['Total Cases', 'Total Deaths', 'Total Vaccinations'],
+                        projection = "orthographic",
+                        color_continuous_scale = px.colors.sequential.Hot)
+    
+    fig.update_layout(margin = dict(l=4, r=4, b=4))
+    return fig 
+
+    
+def graph_country(df, country, row_name = 'Total Cases'):
+    
+    df_world = df.loc[df_world_d['Country'] == '{}'.format(country)]
+    
+    df_world = df_world[['Country', 'date', row_name]]
+    #df_world.fillna(method="ffill", inplace=True)
+    df_world.fillna(0, inplace = True)
+        
+    fig = px.line(df_world, x="date", y = row_name,
+    
+    labels={"date": "",
+            row_name: row_name.title()
+           })
+    
+    return fig
+
+
+def case_content(header, totalcases, newcases):
+    card_content = [
+        dbc.CardHeader(header),
+        dbc.CardBody(
+            [dcc.Markdown(dangerously_allow_html = True, 
+                          children =['{0} <br><sub> + {1} </sub></br>'.format(totalcases,newcases)])
+            ]
+        )
+    ]
+    return card_content
+app = dash.Dash(external_stylesheets = [dbc.themes.BOOTSTRAP])
+top = html.H1(id = 'H1', children = 'COVID-19 TRACKER', style = {'textAlign':'center','color':'black'})
+
+marquee_1 = html.Marquee(id = 'marquee',
+                         children = "FOR ALL LATEST INFORMATION GO TO CDC'S OFFICIAL WEBSITE",
+                         style = {'fontWeight':'bold', 'textAlign':'center','height':'25px','font':'25px','color':'black'})
+
+app_body = dbc.Container([
+    dbc.Row([
+        dbc.Col(dbc.Card(case_content('Confirmed',
+                                      f'{confirmed:,}',
+                                      f'{newconfirmed:,}'), 
+                         color = 'info',outline = True)),
+        
+        dbc.Col(dbc.Card(case_content('Deaths',f'{deaths:,}',
+                                      f'{newdeaths:,}'), 
+                         color = 'danger', outline = True))
+        
+        
+        ]),
+    
+    html.Br(),
+        dbc.Row([
+            
+            dbc.Col(dcc.Dropdown(id = 'country_dropdown',
+                                 style = {'width':'100%'},
+                                 options = [{'label':i, 'value':i} for i in countries['Country'].unique()],
+                                 value = 'Afghanistan')),
+            
+            #dbc.Col([dcc.Dropdown(id = 'option_dropdown_2',style = {'width':'100%'} , 
+            #                      options = ['Total Vaccinations', 'Total Cases', 'Total Deaths'],
+            #                      value = 'total_cases')]),
+            
+            dbc.Col(dcc.Dropdown(id = 'map_dropdown',
+                                 style = {'width':'100%','display':'inline-block'}, 
+                                 options = ['Total Vaccinations', 'Total Cases', 'Total Deaths'], 
+                                 value = 'Total Cases'))
+        ]),
+    
+    html.Br(),
+        
+        dbc.Row([
+            dbc.Col(dcc.Graph(id = 'line_graph'),
+                    style = {'width':'49%','display':'inline-block'}),
+            
+            dbc.Col(dcc.Graph(id = 'world-graph'),
+                    style = {'width':'49%','display':'inline-block'})
+    
+          ])
+                      
+   ])
+
+
+@app.callback(Output(component_id = 'world-graph',component_property = 'figure'),
+              [Input(component_id = 'map_dropdown',component_property = 'value')])
+
+def world_map(map_option):
+       
+    return graph_map(df_world_last, map_option)
+    
+
+@app.callback(Output(component_id = 'line_graph',component_property = 'figure'),
+              [Input(component_id = 'country_dropdown',component_property = 'value'),
+               Input(component_id = 'map_dropdown',component_property = 'value')])
+
+def country_map(country_dropdown, map_dropdown):
+    
+    return graph_country(df_world_clean, country_dropdown, map_dropdown)
+    
+
+    
+    
+app.layout = html.Div(id = 'parent', 
+                      children = [top,marquee_1,app_body],
+                      style= {'background-image':backgroup_image})
+
+
+if __name__ == "__main__":
+    app.run_server()
+
+
